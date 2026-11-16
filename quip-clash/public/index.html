@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Quip Clash</title>
+<style>
+:root{--bg:#fff7e6;--fg:#2b1b3d;--card:#fff;--mut:#6f5f80;--acc:#d9266b;--line:#e8dcc8;--ok:#1b8a5f;--sel:#ffe3ee}
+@media (prefers-color-scheme:dark){:root{--bg:#1a1026;--fg:#f6eeff;--card:#2a1c3d;--mut:#b5a3c9;--line:#43315c;--ok:#3ed598;--sel:#4a1f38}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:500 17px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+#wrap{max-width:720px;margin:0 auto;padding:16px}
+header{display:flex;justify-content:space-between;align-items:center}
+h1{margin:0;font-size:30px;color:var(--acc)}h2{margin:.2em 0}
+#tm{font-weight:700;font-size:24px}
+#sb{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.chip{background:var(--card);border:1px solid var(--line);border-radius:99px;padding:4px 10px;font-size:14px;display:inline-flex;align-items:center;gap:6px}
+.off{opacity:.45}
+.dot{width:12px;height:12px;border-radius:50%;display:inline-block;flex:none}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;margin:12px 0}
+.center{text-align:center}.mut{color:var(--mut)}
+.prompt{font-size:24px;font-weight:700;margin:14px 0;line-height:1.25}
+.tag{color:var(--mut);font-size:14px;text-transform:uppercase;letter-spacing:.06em}
+input,textarea{width:100%;font:inherit;padding:12px;border-radius:12px;border:2px solid var(--line);background:var(--card);color:var(--fg);margin:8px 0;resize:none}
+.btn{font:inherit;font-weight:700;background:var(--acc);color:#fff;border:0;border-radius:14px;padding:12px 20px;cursor:pointer;width:100%;margin-top:8px}
+.btn.sec{background:transparent;color:var(--mut);border:2px solid var(--line)}
+.btn:disabled{opacity:.5;cursor:default}
+.duel{display:grid;gap:12px;grid-template-columns:1fr}
+@media(min-width:600px){.duel{grid-template-columns:1fr 1fr}}
+.opt,.ca{font:inherit;color:var(--fg);background:var(--card);border:3px solid var(--line);border-radius:16px;padding:18px;text-align:center;width:100%;overflow-wrap:anywhere}
+.opt{cursor:pointer}.sel{border-color:var(--acc);background:var(--sel)}.win{border-color:var(--ok)}
+.who{color:var(--mut);font-size:15px;margin-top:8px}.pts{font-weight:700;color:var(--ok);font-size:20px}
+.note{background:var(--sel);padding:10px 14px;border-radius:12px;margin:10px 0}
+.qp{text-align:center;font-weight:700;font-size:26px;color:var(--acc);margin:10px 0}
+.row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}.grow{flex:1}
+.code{font-size:48px;font-weight:800;letter-spacing:.2em;text-align:center;color:var(--acc)}
+#err{color:var(--acc);min-height:1.4em;text-align:center}
+</style>
+</head>
+<body>
+<div id="wrap">
+<header><h1>Quip Clash</h1><div id="tm"></div></header>
+<div id="sb"></div>
+<main id="main"></main>
+<div id="err"></div>
+</div>
+<script>
+(function(){
+'use strict';
+var PAL=['#d9266b','#2f6fed','#1b9b6e','#b86e00','#8a3ffc','#d4472a'];
+var S=null,es=null,recvAt=0,saved=null,lastKey='',busy=false;
+function $(s){return document.querySelector(s)}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function store(k,v){try{if(v===undefined)return localStorage.getItem(k);if(v===null)localStorage.removeItem(k);else localStorage.setItem(k,v)}catch(e){}return null}
+function err(m){$('#err').textContent=m||'';if(m)setTimeout(function(){if($('#err').textContent===m)$('#err').textContent=''},4000)}
+function api(op,body){
+  body=body||{};if(saved){body.room=saved.room;body.token=saved.token}
+  return fetch('/api/'+op,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||'Something went wrong');return j})});
+}
+function connect(){
+  if(es)es.close();
+  es=new EventSource('/api/events?room='+encodeURIComponent(saved.room)+'&token='+encodeURIComponent(saved.token));
+  es.onmessage=function(e){S=JSON.parse(e.data);recvAt=Date.now();render()};
+  es.onerror=function(){if(es.readyState===2){saved=null;S=null;store('qc',null);render()}};
+}
+function remaining(){return S?Math.max(0,S.ms-(Date.now()-recvAt)):0}
+function col(i){return PAL[i%6]}
+function lab(){return S.round===3?'Last Lap':'Round '+S.round+' of 3'}
+function put(key,html){
+  if(key===lastKey)return;lastKey=key;$('#main').innerHTML=html;
+  var t=$('#ans');if(t)t.focus();
+}
+function inviteLink(){return location.origin+'/?r='+S.code}
+
+function homeView(){
+  var m=/[?&]r=([A-Za-z]{4})/.exec(location.search),code=m?m[1].toUpperCase():'',nm=store('qc_name')||'';
+  return {key:'home',html:'<div class="card"><h2>Play with friends</h2><p class="mut">3 to 6 players. Funny prompts, secret answers, anonymous voting.</p><input id="nm" maxlength="14" autocomplete="off" placeholder="Your name" value="'+esc(nm)+'">'
+   +(code?'':'<button class="btn" data-act="create">Create a room</button><p class="mut center">or join a friend’s room</p>')
+   +'<input id="rc" maxlength="4" autocomplete="off" autocapitalize="characters" placeholder="Room code" value="'+esc(code)+'"><button class="btn'+(code?'':' sec')+'" data-act="join">Join room</button>'+(code?'<button class="btn sec" data-act="create">Create my own room instead</button>':'')+'</div>'};
+}
+function lobbyView(){
+  var host=S.host===S.me,n=S.players.length;
+  var rows=S.players.map(function(p,i){return '<div class="row'+(p.on?'':' off')+'"><i class="dot" style="background:'+col(i)+'"></i><span class="grow">'+esc(p.name)+(p.id===S.me?' (you)':'')+'</span>'+(p.id===S.host?'<span>👑 host</span>':'')+'</div>'}).join('');
+  return {key:'lobby|'+JSON.stringify(S.players)+'|'+S.host,html:'<div class="card"><div class="tag center">Room code</div><div class="code">'+esc(S.code)+'</div><button class="btn sec" data-act="copy">Copy invite link</button></div><div class="card"><h2>Players · '+n+' of 6</h2>'+rows+(host?'<button class="btn" data-act="start"'+(n<3?' disabled':'')+'>Start game</button>'+(n<3?'<p class="mut center">Need at least 3 players.</p>':''):'<p class="mut center">Waiting for the host to start…</p>')+'</div>'};
+}
+function cardsRO(c){return '<div class="duel">'+c.map(function(x){return '<div class="ca">'+esc(x.t||'(no answer)')+'</div>'}).join('')+'</div>'}
+function gameView(){
+  var tag='<div class="tag">'+lab()+'</div>',endBtn=S.host===S.me?'<button class="btn sec" data-act="end">End game</button>':'';
+  if(S.phase==='answer'){
+    var step=S.tasks.filter(function(t){return t.a}).length;
+    if(step>=S.tasks.length)return {key:'aw|'+S.round,html:'<div class="card center">'+tag+'<h2>Answers locked in ✓</h2><p class="mut" id="cnt"></p></div>'+endBtn};
+    var t=S.tasks[step];
+    return {key:'af|'+S.round+'|'+step,html:'<div class="card">'+tag+' · question '+(step+1)+' of '+S.tasks.length+'<div class="prompt">'+esc(t.q)+'</div><textarea id="ans" data-idx="'+t.idx+'" maxlength="55" rows="2" placeholder="Be funny…"></textarea><button class="btn" data-act="submit">Submit answer</button><p class="mut center" id="cnt"></p></div>'+endBtn};
+  }
+  if(S.phase==='vote'){
+    var body,k;
+    if(S.round<3){
+      if(!S.isCand){k='v|'+S.q+'|'+S.choice;body='<div class="duel">'+S.cands.map(function(x){return '<button class="opt'+(S.choice===x.o?' sel':'')+'" data-act="vote" data-o="'+esc(x.o)+'">'+esc(x.t)+'</button>'}).join('')+'</div><p class="mut center">'+(S.choice?'Vote locked in. Tap the other one to change it.':'Tap the funnier answer.')+'</p><p class="mut center" id="cnt"></p>'}
+      else{k='vc|'+S.q;body=cardsRO(S.cands)+'<p class="mut center">Your answer is up! Fingers crossed…</p><p class="mut center" id="cnt"></p>'}
+    }else{
+      var opts=S.cands.filter(function(x){return !x.mine}),cap=Math.min(3,opts.length);
+      k='v3|'+S.picks.join(',')+'|'+S.locked;
+      body='<p class="mut">Pick up to '+cap+' favorites (you can’t vote for yourself).</p>'+opts.map(function(x){return '<button class="opt'+(S.picks.indexOf(x.o)>=0?' sel':'')+'" style="margin-bottom:10px" data-act="pick" data-o="'+esc(x.o)+'"'+(S.locked?' disabled':'')+'>'+esc(x.t)+'</button>'}).join('')+'<button class="btn" data-act="lock"'+(S.locked?' disabled':'')+'>'+(S.locked?'Locked in ✓':'Lock in votes')+'</button><p class="mut center" id="cnt"></p>';
+    }
+    return {key:k+'|'+S.round,html:'<div class="card">'+tag+'<div class="prompt">'+esc(S.q)+'</div>'+body+'</div>'+endBtn};
+  }
+  if(S.phase==='reveal'){
+    var h;
+    if(S.round<3){
+      var mx=Math.max.apply(null,S.res.map(function(x){return x.v}));
+      h='<div class="card">'+tag+'<div class="prompt">'+esc(S.q)+'</div><div class="duel">'+S.res.map(function(x){return '<div class="ca'+(x.v===mx&&mx>0?' win':'')+'"><div>'+esc(x.t||'(no answer)')+'</div><div class="who">— '+esc(x.name)+'</div><div>'+x.v+' vote'+(x.v===1?'':'s')+'</div><div class="pts">+'+x.d+'</div></div>'}).join('')+'</div>'+(S.qp?'<div class="qp">🎉 CLEAN SWEEP! 🎉</div>':'')+'</div>';
+    }else{
+      h='<div class="card">'+tag+'<div class="prompt">'+esc(S.q)+'</div>'+(S.res.length?S.res.map(function(x,i){return '<div class="row"><span>'+(i===0&&x.v>0?'🏆':'')+'</span><div class="grow"><div>'+esc(x.t)+'</div><div class="who">— '+esc(x.name)+'</div></div><div class="pts">'+x.v+' · +'+x.d+'</div></div>'}).join(''):'<p class="mut">Nobody answered.</p>')+'</div>';
+    }
+    return {key:'r|'+S.round+'|'+S.q+'|'+JSON.stringify(S.res),html:h+endBtn};
+  }
+  var rk=S.players.slice().sort(function(a,b){return b.score-a.score}),med=['🥇','🥈','🥉'];
+  return {key:'f|'+JSON.stringify(S.players),html:'<div class="card center"><h2>Final scores</h2></div><div class="card">'+rk.map(function(p,i){return '<div class="row"><span>'+(med[i]||'')+'</span><i class="dot" style="background:'+col(p.ci)+'"></i><span class="grow">'+esc(p.name)+'</span><b>'+p.score+'</b></div>'}).join('')+'</div>'+(S.host===S.me?'<button class="btn" data-act="end">Play again</button>':'<p class="mut center">Waiting for the host to start another game…</p>')};
+}
+function render(){
+  var o;
+  if(!S){$('#sb').innerHTML='';o=homeView()}
+  else{
+    $('#sb').innerHTML=S.phase==='lobby'?'':S.players.slice().sort(function(a,b){return b.score-a.score}).map(function(p){return '<span class="chip'+(p.on?'':' off')+'"><i class="dot" style="background:'+col(p.ci)+'"></i>'+esc(p.name)+' <b>'+p.score+'</b></span>'}).join('');
+    o=S.phase==='lobby'?lobbyView():gameView();
+  }
+  put(o.key,o.html);patchDyn();
+}
+function patchDyn(){
+  var tm=$('#tm');
+  tm.textContent=S&&(S.phase==='answer'||S.phase==='vote')?'⏱ '+Math.ceil(remaining()/1000):'';
+  var c=$('#cnt');if(!c||!S)return;
+  if(S.phase==='answer')c.textContent=S.done+' of '+S.total+' players done';
+  else if(S.phase==='vote')c.textContent=S.votesIn+' of '+S.votesTotal+' votes in';
+}
+function submit(){
+  var t=$('#ans');if(!t||!S||S.phase!=='answer')return;
+  var txt=t.value.trim();if(!txt){t.focus();return}
+  var idx=+t.dataset.idx;t.value='';
+  api('answer',{idx:idx,text:txt}).catch(function(e){err(e.message)});
+}
+function onClick(e){
+  var b=e.target.closest('[data-act]');if(!b||b.disabled)return;
+  var a=b.dataset.act;
+  if(a==='create'||a==='join'){
+    if(busy)return;
+    var n=($('#nm').value||'').trim();if(!n){$('#nm').focus();return}
+    store('qc_name',n);busy=true;
+    var p=a==='create'?api('create',{name:n}):api('join',{name:n,room:($('#rc').value||'').trim().toUpperCase()});
+    p.then(function(j){saved={room:j.room,token:j.token};store('qc',JSON.stringify(saved));history.replaceState(null,'','/?r='+j.room);connect()})
+     .catch(function(e){err(e.message)}).then(function(){busy=false});
+    return;
+  }
+  if(a==='copy'){
+    var l=inviteLink();
+    (navigator.clipboard?navigator.clipboard.writeText(l):Promise.reject()).then(function(){err('Link copied!')},function(){window.prompt('Copy this invite link:',l)});
+    return;
+  }
+  if(!S)return;
+  if(a==='start'||a==='end'){api(a).catch(function(x){err(x.message)});return}
+  if(a==='submit'){submit();return}
+  if(a==='vote'){S.choice=b.dataset.o;render();api('vote',{o:b.dataset.o}).catch(function(x){err(x.message)});return}
+  if(a==='pick'){
+    var o=b.dataset.o,picks=S.picks.slice(),i=picks.indexOf(o),cap=Math.min(3,S.cands.filter(function(x){return !x.mine}).length);
+    if(i>=0)picks.splice(i,1);else if(picks.length<cap)picks.push(o);
+    S.picks=picks;render();api('picks',{picks:picks}).catch(function(x){err(x.message)});return;
+  }
+  if(a==='lock'){
+    S.locked=true;render();
+    api('picks',{picks:S.picks}).then(function(){return api('lock')}).catch(function(x){err(x.message)});
+  }
+}
+$('#main').addEventListener('click',onClick);
+$('#main').addEventListener('keydown',function(e){
+  if(e.key!=='Enter'||e.shiftKey)return;
+  if(e.target.id==='ans'){e.preventDefault();submit()}
+  else if(e.target.id==='nm'||e.target.id==='rc'){e.preventDefault();var j=document.querySelector('[data-act="join"]');var c=document.querySelector('[data-act="create"]');(($('#rc').value.trim()?j:c)||j).click()}
+});
+setInterval(function(){
+  patchDyn();
+  if(S&&S.phase==='answer'&&remaining()<=1200){var t=$('#ans');if(t&&t.value.trim())submit()}
+},250);
+try{saved=JSON.parse(store('qc')||'null')}catch(e){saved=null}
+var q=/[?&]r=([A-Za-z]{4})/.exec(location.search);
+if(saved&&q&&saved.room!==q[1].toUpperCase())saved=null;
+render();
+if(saved)connect();
+})();
+</script>
+</body>
+</html>
